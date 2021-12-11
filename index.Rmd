@@ -46,93 +46,243 @@ class_diag <- function(score, truth, positive, cutoff=.5){
 
 # Mining, Classification, Prediction
 
-## Name and EID here
+## Deanna Mendoza dfm692
 
 ### Introduction 
 
-Paragraph or two introducing your datasets and variables, why they are interesting to you, etc. See instructions for more information
+*I am doing this Project over malignant melanoma- a form of skin cancer that develops in the melanocytes- and the survival rate after patients have their tumors removed. There are 7 variables- time, status, sex, age, year, thickness, and ulcer. There are two binary variables, sex (1 = male, 0 = female) and ulcer (1 = present, 0 = absent). The status variable indicates if the patient has died from melanoma (1), is alive (2), or has died from unrelated causes (3). I am interested in this data set because my family line is predisposed to cancer and it's good to be knowledgeable and informed on these topics from actual research done.*
 
 ```{R}
 library(tidyverse)
-# read your datasets in here, e.g., with read_csv()
 
-# if your dataset needs tidying, do so here
-
-# any other code here
+#install.packages("boot")
+melanoma <- boot::melanoma
 ```
 
 ### Cluster Analysis
 
 ```{R}
 library(cluster)
-# clustering code here
+
+sil_width<-vector() #empty vector to hold mean sil width
+for(i in 2:10){  
+  kms <- kmeans(melanoma,centers=i) #compute k-means solution for each k
+  sil <- silhouette(kms$cluster,dist(melanoma)) #get sil widths
+  sil_width[i]<-mean(sil[,3]) #take averages (higher is better)
+}
+
+ggplot()+geom_line(aes(x=1:10,y=sil_width))+scale_x_continuous(name="k",breaks=1:10)
+
+melanoma_pam <- melanoma %>% pam(k=2) 
+melanoma_pam
+
+melanoma_pam$silinfo$avg.width
+
+library(GGally)
+
+melanoma %>% mutate(cluster=as.factor(melanoma_pam$clustering)) %>% ggpairs(cols= 1:7, aes(color=cluster))
+
 ```
 
-Discussion of clustering here
-    
+*To find which number of clusters was appropriate to use, I performed a cluster analysis on the data set and found that 2 clusters maximized the average silhouette width. I found the average silhouette width to be 0.60 meaning we can use this to interpret is as a reasonable structure has been found within the data.*
+
+*Time has the greatest difference between the two clusters and has barely any overlapping. The variable age shows the most overlapping between the clusters. From visualizing the graphs, I assume that Cluster 1 (red) shows patients who were treated and survived for a shorter amount of time after the procedure and Cluster 2 (blue) has more survivors present to this day as you can see in the status variable clusters.*
+
     
 ### Dimensionality Reduction with PCA
 
 ```{R}
-# PCA code here
+
+princomp(melanoma, cor=T) -> pca_melanoma
+
+summary(pca_melanoma, loadings="T") 
+
+cormat2 <- pca_melanoma$scores%>% cor(use='pair')%>%round(10)
+cormat2
+
+library(factoextra)
+
+fviz_pca_biplot(pca_melanoma)
+
+tidycor2 <- pca_melanoma$scores %>% as.data.frame %>% mutate(time=melanoma$time)
+
+tidycor2%>%ggplot(aes(x=Comp.1, y=Comp.2, color=time))+ geom_point() + coord_fixed()
+
 ```
 
-Discussions of PCA here. 
+*For this data, we can keep 5 PCs to hit 87% of the total variance. For visualization purposes, I decided to graph PC1 and PC 2 in the last graph because they each have the greatest proportion of variance.*
+
+*Comp. 1 has positive loadings for time and status, so this is a very general measure for how long a patient has survived after their procedure and if they are alive or dead. This component gives a quick glance of time vs. status. Comp. 2 has positive loadings for all variables besides status, age, and year. This is likely a component that focuses on only the ulcer itself and the gender of the individual. It focuses on the more binary variables present and gives a more clinical observation. Comp. 3 is positive for all variables but year and does not include ulcer. This component focuses on the age and survival of the individual.*
+
+*If Comp. 1 is scored high on, the patient is likely dead from unrelated causes because they survived so long after the procedure,, but they were melanoma survivors. If Comp 2 is scored high on, the patient has a large ulceration present and a thick tumor that was removed. If Comp. 3 is scored high on, you are likely older and had a thick tumor present.*
+
+*I notice that when the individual scores high on Comp. 1, they have a higher survival time and higher chance the patient outlived melanoma. This makes sense because Comp. 1 included a more general look at the status of patients in relation to time. The longer you survive the procedure, the more likely your cause of death will not be melanoma. *
 
 ###  Linear Classifier
 
 ```{R}
-# linear classifier code here
+
+melanoma_logical <- melanoma %>% select(-sex) %>% mutate(ulcer = as.logical(melanoma$ulcer))
+
+logistic_fit <- glm(ulcer=="TRUE" ~ time + status + age + year + thickness, data=melanoma_logical, family="binomial")
+
+prob_reg <- predict(logistic_fit, type="response") 
+
+class_diag(prob_reg, melanoma_logical$ulcer, positive="TRUE")
+
+
+fit <- glm(ulcer ~ . , data=melanoma_logical, family="binomial")
+probs <- predict(fit, type="response")
+table(truth = melanoma_logical$ulcer, predictions = probs>.5)
+
+
 ```
 
 ```{R}
-# cross-validation of linear classifier here
+set.seed(150)
+k=10
+
+data<-sample_frac(melanoma_logical) #randomly order rows
+folds <- rep(1:k, length.out=nrow(data)) #create folds
+
+diags<-NULL
+
+i=1
+for(i in 1:k){
+train<-data[folds!=i,] 
+test<-data[folds==i,] 
+truth<-test$ulcer
+
+# train model
+fit <- glm(ulcer == "TRUE" ~ time + status + age + year + thickness, data=train)
+coef(fit)
+
+# test model
+probs <- predict(fit,newdata = test,type="response")
+
+diags<-rbind(diags,class_diag(probs,truth, positive="TRUE")) }
+
+summarize_all(diags,mean)
 ```
 
-Discussion here
+*The linear classifier model is performing at a high AUC (0.813) that is close to 1, or a perfect prediction. There is some overlap between TP and FP, so not all predictions are perfect. Upon analyzing the confusion matrix, there are 98 TN and 56 TP. However, there are 34 FP and 17 FP.*
+
+*There is a noticeable decrease in AUC (0.813 to 0.796) when predicting out of sample. There is a sign of overfitting because the AUC dropped in CV.*
 
 ### Non-Parametric Classifier
 
 ```{R}
 library(caret)
-# non-parametric classifier code here
+
+fit <- knn3(ulcer ~ . , data=melanoma_logical)
+probs <- predict(fit, newdata=melanoma_logical)[,2] 
+class_diag(probs, melanoma_logical$ulcer, positive="TRUE") 
+table(truth = melanoma_logical$ulcer, predictions = probs>.5)
+
 ```
 
 ```{R}
-# cross-validation of np classifier here
+set.seed(150)
+k=10
+
+data<-sample_frac(melanoma_logical) #randomly order rows
+folds <- rep(1:k, length.out=nrow(data)) #create folds
+
+diags<-NULL
+
+i=1
+for(i in 1:k){
+train<-data[folds!=i,] 
+test<-data[folds==i,] 
+truth<-test$ulcer
+
+# train model
+fit <- knn3(ulcer=="TRUE" ~ time + status + age + year + thickness, data=train, k=5)
+coef(fit)
+
+# test model
+probs <- predict(fit, test)[,2]
+
+diags<-rbind(diags,class_diag(probs,truth, positive="TRUE")) }
+
+summarize_all(diags,mean)
 ```
 
-Discussion
+*The non-parametric classifier model is performing at a high (and similar to the linear model) AUC (0.814) that is close to 1, or a perfect prediction. There is some overlap between TP and FP, so not all predictions are perfect. Upon analyzing the confusion matrix, there are 98 TN and 55 TP. However, there are 35 FP and 17 FP. These numbers are all similar to the linear model, but overall performs slightly better in this model.*
+
+*There is a noticeable decrease in AUC (0.814 to 0.664) when predicting out of sample. There is a sign of overfitting because the AUC dropped in CV. Overall, I would say that the linear model performed much better than the non-parametric model because there was less overfitting present. There was a smaller decrease (0.017 vs. 0.150) in CV AUC with the linear model.*
 
 
 ### Regression/Numeric Prediction
 
 ```{R}
-# regression model code here
+
+fit<-lm(thickness~.,data=melanoma_logical) #predict mpg from all other variables
+yhat<-predict(fit)
+
+#cbind(yhat, y=melanoma_logical$thickness)
+
+mean((melanoma_logical$thickness-yhat)^2)
 ```
 
 ```{R}
-# cross-validation of regression model here
+set.seed(1234)
+k=5 #choose number of folds
+data<-melanoma_logical[sample(nrow(melanoma_logical)),] #randomly order rows
+folds<-cut(seq(1:nrow(melanoma_logical)),breaks=k,labels=F) #create folds
+diags<-NULL
+for(i in 1:k){
+  train<-data[folds!=i,]
+  test<-data[folds==i,]
+  ## Fit linear regression model to training set
+  fit<-lm(thickness~.,data=train)
+  ## Get predictions/y-hats on test set (fold i)
+  yhat<-predict(fit,newdata=test)
+  ## Compute prediction error  (MSE) for fold i
+  diags<-mean((test$thickness-yhat)^2) 
+}
+mean(diags) 
 ```
 
-Discussion
+*The MSE from the linear regression model and overall dataset is 6.42 and then 4.98 in cross validation. This is a good indicator that there is no overfitting present.*
 
 ### Python 
 
 ```{R}
 library(reticulate)
+use_python("/usr/bin/python3")
+plot <- import("matplotlib")
+plot$use("Agg", force = TRUE)
+
+x <- melanoma$time
+y <- melanoma$status
+
 ```
 
 ```{python}
-# python code here
-```
+import matplotlib.pyplot as plt
 
-Discussion
+plt.scatter(r.x, r.y, color = "red")
+plt.xlabel('time (sec)')
+plt.ylabel('status')
+plt.title('Status vs. Time')
+plt.show()
+
+x =  12
+y = 13
+```
+```{R}
+z = py$x+py$y
+print(paste("python x + python y = ", z))
+head(x)
+head(y)
+```
+*In the first code chunk, I used R to establish the objects x and y from the `melanoma` dataset. Then in the python code chunk, I used 'r.' to share the r objects  in the python chunk without importing the entire dataset.*
+*I then made a basic Status vs. Time plot in python and colored it red. At the end of the python code chunk, I established new objects that were the same name as the R objects.*
+*Then in the second R code chunk, I added the two objects, x and y, from the python chunk and printed the first couple of values from the R x and y to show that they are different values.*
 
 ### Concluding Remarks
 
-Include concluding remarks here, if any
-
-
+Overall, I learned that there is a good relationship from the variables in the 'melanoma' dataset. You are able to use the variables in the dataset to predict the outcomes of the rest of the dataset. Personally, I found that it was interesting to use PCA and generate different PC's to see how the data can be grouped to tell different aspects of the dataset.
 
 
